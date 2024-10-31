@@ -130,3 +130,129 @@ Console.WriteLine(ageValidation.IsValid ? "Age is valid" : $"{ageValidation.Prop
 ```
 
 This approach provides a highly readable and flexible validation system that can be easily extended across your application.
+
+
+
+To implement a validation system where subsequent validations are skipped if any previous validation fails, you can create a chainable validation method that maintains state about whether previous validations were successful. This way, the fluent API can support calls like `user.Validate().Validate().Validate()`, but it won't proceed with additional validations once a failure is encountered.
+
+Here's how you can achieve this:
+
+### 1. Create a `ValidationBuilder` Class
+
+This class will hold the state of the validation process and provide methods for chaining validations.
+
+### Implementation
+
+#### Step 1: Define the `ValidationBuilder`
+
+This class will manage the validation state and control whether to proceed with additional validations.
+
+```csharp
+using System;
+using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
+using System.Linq.Expressions;
+
+public class ValidationBuilder<T>
+{
+    private readonly T _value;
+    private readonly List<ValidationResult> _results;
+
+    public ValidationBuilder(T value)
+    {
+        _value = value;
+        _results = new List<ValidationResult>();
+    }
+
+    public ValidationBuilder<T> Validate<TProp>(Expression<Func<T, TProp>> propertyExpression, 
+                                                 Func<TProp, bool> predicate, 
+                                                 string errorMessage)
+    {
+        // Skip validation if any previous validations have failed
+        if (_results.Count > 0 && _results.Any(result => result != ValidationResult.Success))
+        {
+            return this;
+        }
+
+        // Extract the property name from the expression
+        var propertyName = ((MemberExpression)propertyExpression.Body).Member.Name;
+
+        // Get the property value
+        var propertyValue = propertyExpression.Compile().Invoke(_value);
+
+        // Run the validation predicate
+        var result = predicate(propertyValue) 
+            ? ValidationResult.Success 
+            : new ValidationResult(errorMessage, new[] { propertyName });
+
+        _results.Add(result);
+        return this;
+    }
+
+    public IEnumerable<ValidationResult> Results => _results;
+}
+```
+
+#### Step 2: Update the `For` Extension Method
+
+Add a method to start the validation process, returning a `ValidationBuilder`.
+
+```csharp
+public static class ValidationHelper
+{
+    public static ValidationBuilder<T> For<T>(this T value) => new ValidationBuilder<T>(value);
+}
+```
+
+### Example Usage
+
+Now you can use this fluent API as follows:
+
+```csharp
+public class User
+{
+    public string Name { get; set; }
+    public int Age { get; set; }
+}
+
+public static class Program
+{
+    public static void Main()
+    {
+        var user = new User { Name = "", Age = 17 };
+
+        // Fluent validation with chaining
+        var validationResults = user.For()
+            .Validate(x => x.Name, name => !string.IsNullOrWhiteSpace(name), "Name cannot be empty")
+            .Validate(x => x.Age, age => age >= 18, "User must be at least 18 years old")
+            .Results;
+
+        // Display validation results
+        foreach (var result in validationResults)
+        {
+            if (result != ValidationResult.Success)
+            {
+                Console.WriteLine($"{string.Join(", ", result.MemberNames)} Error: {result.ErrorMessage}");
+            }
+        }
+
+        // If you want to check if there are any failures
+        if (validationResults.Any(result => result != ValidationResult.Success))
+        {
+            Console.WriteLine("Validation failed.");
+        }
+        else
+        {
+            Console.WriteLine("User is valid.");
+        }
+    }
+}
+```
+
+### Key Points
+
+- **Early Exit on Failure**: The `Validate` method checks the list of results and skips further validation if any previous validation has failed.
+- **Chaining**: You can continue to chain `Validate` calls as desired, with validation stopping at the first failure.
+- **Flexible and Extensible**: This structure is flexible enough to add more validation rules or modify existing ones.
+
+This design ensures that validations are efficiently handled, avoiding unnecessary checks once a failure has been detected, while also maintaining a clean and fluent API.
